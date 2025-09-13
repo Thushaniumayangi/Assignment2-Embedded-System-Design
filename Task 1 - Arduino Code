@@ -1,0 +1,136 @@
+//  Pin Assignments 
+#define PIN_SET      2   // SET button
+#define PIN_SPEED    3   // Speed sensor pulse input
+#define PIN_PLUS     4   // (+) button
+#define PIN_MINUS    5   // (-) button
+#define PIN_BRAKE    6   // Brake button
+#define PIN_THROTTLE 9   // PWM output (LED simulates throttle)
+
+// Vehicle Parameters 
+#define WHEEL_CIRCUMFERENCE 2.0   // meters per wheel revolution
+#define PULSES_PER_REV      1     // pulses per wheel revolution
+
+// System States 
+enum State { OFF, STANDBY, ACTIVE, OVERRIDE };
+volatile State current_state = OFF;
+
+// Speed Control Variables 
+volatile int target_speed = 0;      // desired speed (km/h)
+volatile int current_speed = 0;     // measured speed (km/h)
+volatile unsigned long pulse_count = 0;  // raw pulses counted
+unsigned long last_speed_time = 0;       // last time speed updated
+unsigned long last_display_update = 0;   // last display refresh
+
+// Interrupt Handlers 
+
+// SET button pressed
+void SET_ISR() {
+  if (current_state == STANDBY && current_speed > 0) {
+    current_state = ACTIVE;
+    target_speed = current_speed;
+    Serial.println("-> ACTIVE (Set engaged)");
+  }
+}
+
+// (+) button pressed
+void PLUS_ISR() {
+  if (current_state == ACTIVE) {
+    target_speed += 5;  // increase target by 5 km/h
+    Serial.print("Target speed increased: ");
+    Serial.println(target_speed);
+  }
+}
+
+// (–) button pressed
+void MINUS_ISR() {
+  if (current_state == ACTIVE && target_speed > 5) {
+    target_speed -= 5;  // decrease target by 5 km/h
+    Serial.print("Target speed decreased: ");
+    Serial.println(target_speed);
+  }
+}
+
+// Brake pressed/released
+void BRAKE_ISR() {
+  int val = digitalRead(PIN_BRAKE);
+  if (val == LOW) { // brake pressed
+    current_state = OVERRIDE;
+    Serial.println("-> OVERRIDE (Brake pressed)");
+  } else { // brake released
+    if (current_speed > 0) {
+      current_state = ACTIVE;
+      Serial.println("Brake released -> ACTIVE");
+    } else {
+      current_state = STANDBY;
+      Serial.println("Brake released -> STANDBY");
+    }
+  }
+}
+
+// Speed sensor pulse detected
+void SPEED_PULSE_ISR() {
+  pulse_count++; // count wheel pulses
+}
+
+//  Setup 
+void setup() {
+  Serial.begin(115200);
+
+  // Configure buttons as inputs with internal pull-up
+  pinMode(PIN_SET, INPUT_PULLUP);
+  pinMode(PIN_PLUS, INPUT_PULLUP);
+  pinMode(PIN_MINUS, INPUT_PULLUP);
+  pinMode(PIN_BRAKE, INPUT_PULLUP);
+
+  // Configure outputs
+  pinMode(PIN_THROTTLE, OUTPUT);
+
+  // Configure speed sensor
+  pinMode(PIN_SPEED, INPUT);
+
+  // Attach interrupts
+  attachInterrupt(digitalPinToInterrupt(PIN_SET), SET_ISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_PLUS), PLUS_ISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_MINUS), MINUS_ISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(PIN_BRAKE), BRAKE_ISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_SPEED), SPEED_PULSE_ISR, RISING);
+
+  current_state = STANDBY;  // start system in STANDBY
+  Serial.println("System started -> STANDBY");
+}
+
+//  Main Loop 
+void loop() {
+  unsigned long now = millis();
+
+  // Calculate current speed every 100 ms 
+  if (now - last_speed_time >= 100) {
+    last_speed_time = now;
+
+    // pulses per second = pulses / 0.1s
+    float pulses_per_second = (pulse_count * 10.0);
+    pulse_count = 0; // reset after measurement
+
+    // convert pulses → km/h
+    current_speed = (int)(pulses_per_second * WHEEL_CIRCUMFERENCE * 3.6 / PULSES_PER_REV);
+  }
+
+  //  Control throttle in ACTIVE mode 
+  if (current_state == ACTIVE) {
+    int error = target_speed - current_speed;
+    int pwm = constrain(error * 10, 0, 255); // simple proportional control
+    analogWrite(PIN_THROTTLE, pwm);
+  } else {
+    analogWrite(PIN_THROTTLE, 0); // throttle off if not ACTIVE
+  }
+
+  //  Update display every 250 ms 
+  if (now - last_display_update >= 250) {
+    last_display_update = now;
+    Serial.print("State: ");   Serial.print(current_state);
+    Serial.print(" | Target: "); Serial.print(target_speed);
+    Serial.print(" | Current: "); Serial.println(current_speed);
+  }
+
+  delay(1); // 1 ms loop delay
+}
