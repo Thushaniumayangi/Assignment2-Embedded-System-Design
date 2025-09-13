@@ -1,0 +1,61 @@
+//  Global Variables 
+state = OFF
+target_speed = 0
+current_speed = 0
+pulse_count = 0
+//Interrupt Handlers
+// Called when SET button is pressed
+interrupt SET_pressed {
+    if (state == STANDBY and current_speed > 0) {
+        state = ACTIVE
+        target_speed = current_speed
+        display("-> ACTIVE (Set engaged)")
+    }}
+// Called when (+) button is pressed
+interrupt PLUS_pressed {
+    if (state == ACTIVE) {
+        target_speed = target_speed + 5
+    }}
+// Called when (-) button is pressed
+interrupt MINUS_pressed {
+    if (state == ACTIVE and target_speed > 5) {
+        target_speed = target_speed - 5
+    }}
+// Called when Brake is pressed or released
+interrupt BRAKE_changed {
+    if (brake == PRESSED) {
+        state = OVERRIDE
+        display("-> OVERRIDE (Brake pressed)")
+    } else {
+        if (current_speed > 0) {
+            state = ACTIVE
+            display("Brake released -> ACTIVE")
+        } else
+ {
+            state = STANDBY
+            display("Brake released -> STANDBY")
+        }    } }
+// Called on each speed sensor pulse
+interrupt SPEED_pulse {
+    pulse_count = pulse_count + 1
+}
+// Main Program 
+function main() {
+    initialize hardware
+    state = STANDBY
+    loop forever {
+        // Update current speed every 100ms
+        if (time_elapsed(100ms)) {
+            current_speed = convert_pulses_to_kmh(pulse_count)
+            pulse_count = 0        }
+        // Control throttle in ACTIVE state
+        if (state == ACTIVE) {
+            error = target_speed - current_speed
+            throttle = proportional_control(error)
+        } else {
+            throttle = 0        }
+        // Update display every 250ms
+        if (time_elapsed(250ms)) {
+            display("State=", state, " Target=", target_speed, " Current=", current_speed)
+        }
+        wait(1ms)   } }
