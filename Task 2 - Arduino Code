@@ -1,0 +1,134 @@
+//  Pin Assignments 
+#define PIN_SET      2   // SET button
+#define PIN_PLUS     3   // (+) button
+#define PIN_MINUS    4   // (-) button
+#define PIN_BRAKE    5   // Brake button
+#define PIN_SPEED    6   // Speed sensor (pulse generator)
+#define PIN_THROTTLE 9   // PWM output (LED simulates throttle)
+
+//  Vehicle Parameters 
+#define WHEEL_CIRCUMFERENCE 2.0   // meters per wheel revolution
+#define PULSES_PER_REV      1     // pulses per wheel revolution
+
+//  FSM States 
+enum State { OFF, STANDBY, ACTIVE, OVERRIDE };
+State current_state = OFF;
+
+// Variables 
+int target_speed = 0;
+int current_speed = 0;
+int pulse_count = 0;
+
+unsigned long last_speed_update = 0;
+unsigned long last_display_update = 0;
+
+//  Setup 
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIN_SET, INPUT_PULLUP);
+  pinMode(PIN_PLUS, INPUT_PULLUP);
+  pinMode(PIN_MINUS, INPUT_PULLUP);
+  pinMode(PIN_BRAKE, INPUT_PULLUP);
+  pinMode(PIN_SPEED, INPUT);
+  pinMode(PIN_THROTTLE, OUTPUT);
+
+  current_state = STANDBY;
+  Serial.println("System started -> STANDBY");
+}
+
+// Helper Functions 
+
+// Poll button (active LOW)
+bool buttonPressed(int pin) {
+  return digitalRead(pin) == LOW;
+}
+
+// Convert pulses into km/h
+int convertPulsesToKmH(int pulses, float interval_s) {
+  float revs_per_sec = pulses / (float)PULSES_PER_REV / interval_s;
+  float speed_mps = revs_per_sec * WHEEL_CIRCUMFERENCE;
+  return (int)(speed_mps * 3.6);  // m/s -> km/h
+}
+
+//  Main Loop 
+void loop() {
+  unsigned long now = millis();
+
+  //  Poll buttons 
+  if (buttonPressed(PIN_SET) && current_state == STANDBY && current_speed > 0) {
+    current_state = ACTIVE;
+    target_speed = current_speed;
+    Serial.println("-> ACTIVE (Set engaged)");
+    delay(200); // debounce
+  }
+
+  if (buttonPressed(PIN_PLUS) && current_state == ACTIVE) {
+    target_speed += 5;
+    Serial.print("Target increased -> ");
+    Serial.println(target_speed);
+    delay(200);
+  }
+
+  if (buttonPressed(PIN_MINUS) && current_state == ACTIVE && target_speed > 5) {
+    target_speed -= 5;
+    Serial.print("Target decreased -> ");
+    Serial.println(target_speed);
+    delay(200);
+  }
+
+  // Poll brake 
+  if (buttonPressed(PIN_BRAKE)) {
+    if (current_state != OVERRIDE) {
+      current_state = OVERRIDE;
+      Serial.println("-> OVERRIDE (Brake pressed)");
+    }
+  } else {
+    if (current_state == OVERRIDE) {
+      if (current_speed > 0) {
+        current_state = ACTIVE;
+        Serial.println("Brake released -> ACTIVE");
+      } else {
+        current_state = STANDBY;
+        Serial.println("Brake released -> STANDBY");
+      }
+    }
+  }
+
+  //  Poll speed sensor 
+  static int last_speed_state = HIGH;
+  int speed_state = digitalRead(PIN_SPEED);
+  if (last_speed_state == LOW && speed_state == HIGH) {
+    pulse_count++;
+  }
+  last_speed_state = speed_state;
+
+  // Update current speed every 100 ms
+  if (now - last_speed_update >= 100) {
+    current_speed = convertPulsesToKmH(pulse_count, 0.1);
+    pulse_count = 0;
+    last_speed_update = now;
+  }
+
+  //Throttle control
+  if (current_state == ACTIVE) {
+    int error = target_speed - current_speed;
+    int pwm = constrain(error * 10, 0, 255); // proportional control
+    analogWrite(PIN_THROTTLE, pwm);
+  } else {
+    analogWrite(PIN_THROTTLE, 0);
+  }
+
+  // Update display every 250 ms 
+  if (now - last_display_update >= 250) {
+    Serial.print("State: ");
+    Serial.print(current_state);
+    Serial.print(" | Target: ");
+    Serial.print(target_speed);
+    Serial.print(" | Current: ");
+    Serial.println(current_speed);
+    last_display_update = now;
+  }
+
+  delay(1); // avoid busy waiting
+}
