@@ -1,0 +1,75 @@
+//  Global Variables 
+state = OFF
+target_speed = 0
+current_speed = 0
+pulse_count = 0
+
+last_speed_update = 0
+last_display_update = 0
+
+//  Main Program 
+function main() {
+    initialize hardware
+    state = STANDBY
+
+    loop forever {
+        now = current_time()
+
+        // Poll buttons and brake 
+        if (SET_button_pressed() && state == STANDBY && current_speed > 0) {
+            state = ACTIVE
+            target_speed = current_speed
+            display("-> ACTIVE (Set engaged)")
+        }
+
+        if (PLUS_button_pressed() && state == ACTIVE) {
+            target_speed = target_speed + 5
+        }
+
+        if (MINUS_button_pressed() && state == ACTIVE && target_speed > 5) {
+            target_speed = target_speed - 5
+        }
+
+        if (BRAKE_pressed()) {
+            state = OVERRIDE
+            display("-> OVERRIDE (Brake pressed)")
+        } else if (BRAKE_released()) {
+            if (current_speed > 0) {
+                state = ACTIVE
+                display("Brake released -> ACTIVE")
+            } else {
+                state = STANDBY
+                display("Brake released -> STANDBY")
+            }
+        }
+
+        //  Poll speed sensor 
+        // Check if new pulses arrived since last loop
+        pulse_count = read_speed_sensor()
+
+        // Update current speed every 100 ms
+        if (now - last_speed_update >= 100) {
+            current_speed = convert_pulses_to_kmh(pulse_count)
+            pulse_count = 0
+            last_speed_update = now
+        }
+
+        // State machine control 
+        if (state == ACTIVE) {
+            error = target_speed - current_speed
+            throttle = proportional_control(error)
+        } else {
+            throttle = 0
+        }
+
+        //  Update display every 250 ms 
+        if (now - last_display_update >= 250) {
+            display("State=", state,
+                    " Target=", target_speed,
+                    " Current=", current_speed)
+            last_display_update = now
+        }
+
+        wait(1ms)   // small delay to prevent busy-waiting
+    }
+}
